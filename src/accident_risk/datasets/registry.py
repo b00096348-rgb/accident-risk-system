@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from accident_risk.datasets.base import MappedTabularAdapter
+from accident_risk.datasets.physiology import WhoopVitalsDataset
 from accident_risk.datasets.polidriving import POLIDrivingAdapter
 from accident_risk.datasets.vzcrash import VZCrashAdapter
 
@@ -29,3 +30,9 @@ def get_adapter(
             f"Unknown dataset {name!r}; available: {sorted(REGISTRY)}. Register an adapter or use --prepared."
         )
     return REGISTRY[name](path, mapping)
+
+
+DATASET_REGISTRY = {
+    # ... existing datasets
+    "whoop_vitals": WhoopVitalsDataset,
+}

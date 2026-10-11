@@ -3,8 +3,9 @@ import json
 import os
 import time
 from datetime import datetime
-from dotenv import load_dotenv
+
 import requests
+from dotenv import load_dotenv
 
 # Load environment variables from .env
 load_dotenv()
@@ -34,7 +35,7 @@ def save_tokens(tokens):
 def load_stored_tokens():
     """Load cached tokens if available."""
     if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, "r") as f:
+        with open(TOKEN_FILE) as f:
             return json.load(f)
     return None
 
