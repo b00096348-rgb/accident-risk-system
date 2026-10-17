@@ -1,167 +1,223 @@
-import os
-import threading
+"""Local research ingestion API; a future Android/BLE gateway sends SensorFrame JSON."""
+
+import time
 from pathlib import Path
+from threading import RLock
 
-import joblib
-import pandas as pd
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
+from accident_risk.inference.engine import InferenceEngine
+from accident_risk.logging_utils import configure_logging
+from accident_risk.models.fusion import RiskFusion
+from accident_risk.models.physiology_model import PhysiologyModel
+from accident_risk.models.vehicle_model import VehicleModel
+from accident_risk.schemas import SENSOR_FIELDS, PredictionResult, SensorFrame
+from accident_risk.settings import EnvironmentSettings, PipelineSettings, load_config
 from accident_risk.sources.live_buffer import LiveBuffer
 
-app = FastAPI(title="Accident Risk System - Realtime Hardware Pipeline")
-live_buffer = LiveBuffer()
 
-state_lock = threading.Lock()
-live_hardware_state = {}
+class Batch(BaseModel):
+    """Bounded request size, with independent accepted/rejected results."""
 
-STATIC_DIR = Path(__file__).parent / "static"
+    frames: list[SensorFrame] = Field(min_length=1, max_length=1000)
 
 
-@app.get("/")
-def serve_dashboard():
-    index_path = STATIC_DIR / "index.html"
-    if index_path.exists():
-        return FileResponse(
-            index_path,
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+def create_app(engine: InferenceEngine | None = None) -> FastAPI:
+    """Create isolated session state; serve with a single worker to retain in-memory state."""
+    if engine is None:
+        env = EnvironmentSettings()
+        config = load_config(env.config) if env.config.exists() else {}
+        configure_logging(config.get("logging", {}).get("level", "INFO"))
+        vehicle = VehicleModel.load(env.vehicle_model) if env.vehicle_model else None
+        physiology = PhysiologyModel.load(env.physiology_model) if env.physiology_model else None
+        engine = InferenceEngine(
+            vehicle,
+            physiology,
+            settings=None
+            if vehicle or physiology
+            else PipelineSettings(**config.get("pipeline", {})),
+            fusion=RiskFusion(**config.get("fusion", {})),
         )
-    return {"status": "active", "message": "Accident Risk System API running"}
+    app = FastAPI(title="Accident-risk research API", version="0.1.0")
+    buffer = LiveBuffer()
+    lock = RLock()
+    app.state.engine = engine
+    app.state.active = True
+    static_dir = Path(__file__).with_name("static")
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+    @app.get("/", include_in_schema=False)
+    def dashboard() -> FileResponse:
+        """Serve the approachable live monitoring dashboard."""
+        return FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-store"})
 
-@app.get("/static/{file_path:path}")
-def serve_static_no_cache(file_path: str):
-    file_full_path = STATIC_DIR / file_path
-    if file_full_path.exists() and file_full_path.is_file():
-        return FileResponse(
-            file_full_path,
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
-        )
-    return {"error": "File not found"}
+    def ingest_frame(frame: SensorFrame) -> PredictionResult | None:
+        """Consume immediately under the session lock; slow modalities never gate ingestion."""
+        if not app.state.active:
+            raise HTTPException(409, "Session is stopped; POST /session/start")
+        try:
+            if frame.timestamp > time.time() + 1:
+                raise ValueError("Timestamp is in the future; use Unix seconds UTC")
+            buffer.push(frame)
+            result = None
+            for pending in buffer:
+                result = engine.process(pending)
+            return result or engine.latest.get(frame.stream_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
+    @app.get("/api/v1/predict/live")
+    def live_dashboard(stream_id: str | None = Query(None)) -> dict:
+        """Display actual observations with the same per-channel expiry as inference."""
+        with lock:
+            sync = engine.pipeline.synchronizer
+            streams = list(sync.values)
+            if stream_id is None:
+                if len(streams) > 1:
+                    raise HTTPException(400, "Specify stream_id for multiple streams")
+                stream_id = streams[0] if streams else "hardware"
+            now = time.time()
+            snapshot = sync.snapshot(stream_id, now)
+            fields = snapshot.model_dump()
+            fresh = any(fields[key] is not None for key in SENSOR_FIELDS)
+            status = (
+                "active"
+                if fresh
+                else ("stale" if stream_id in sync.values else "waiting_for_hardware_stream")
+            )
+            if not app.state.active:
+                status = "stopped"
+                fields = {key: None for key in SENSOR_FIELDS}
+            prediction = engine.latest.get(stream_id)
+            score = None
+            # Never keep a score alive after its inputs expire or the session stops.
+            prediction_fresh = (
+                prediction is not None
+                and 0 <= now - prediction.timestamp <= engine.settings.default_max_age_seconds
+            )
+            if fresh and app.state.active and prediction_fresh:
+                score = prediction.overall_risk_index
+            result = {
+                "status": status,
+                "stream_id": stream_id,
+                "received_at": sync.last.get(stream_id),
+                "sensor_age_seconds": sync.ages(stream_id, now),
+                "risk_score": score,
+                "risk_status": "Research model output"
+                if score is not None
+                else (
+                    "No compatible model loaded"
+                    if not engine.models
+                    else "Waiting for fresh model inputs"
+                ),
+                "speed": fields["vehicle_speed"] * 3.6
+                if fields["vehicle_speed"] is not None
+                else None,
+                "rpm": fields["rpm"],
+                "throttle": fields["throttle_position"],
+                "engine_load": fields["engine_load"],
+                "heart": fields["heart_rate"],
+                "spo2": fields["spo2"],
+                "quality": fields["physiology_signal_quality"],
+                "heading": fields["gps_heading"],
+                "location": {
+                    "latitude": fields["gps_latitude"],
+                    "longitude": fields["gps_longitude"],
+                },
+            }
+            for key in (
+                "accel_x",
+                "accel_y",
+                "accel_z",
+                "gyro_x",
+                "gyro_y",
+                "gyro_z",
+                "steering_angle",
+                "tire_pressure_fl",
+                "tire_pressure_fr",
+                "tire_pressure_rl",
+                "tire_pressure_rr",
+            ):
+                result[key] = fields[key]
+            return result
 
-@app.post("/ingest")
-@app.post("/api/v1/ingest")
-async def ingest_hardware_data(request: Request):
-    global live_hardware_state
-    try:
-        payload = await request.json()
-        if isinstance(payload, dict):
-            payload["stream_id"] = "hardware"
-            with state_lock:
-                live_hardware_state.update(payload)
-            live_buffer.push(payload)
-            return {"status": "success", "ingested": True}
-        return {"status": "error", "message": "Payload must be a JSON object"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@app.get("/api/v1/predict/live")
-def get_live_prediction():
-    global live_hardware_state
-
-    with state_lock:
-        latest_sample = dict(live_hardware_state)
-
-    if not latest_sample:
-        latest_sample = live_buffer.get_latest_snapshot("hardware") or {}
-
-    if not latest_sample:
-        obd_path = Path("data/raw/obd_entries.csv")
-        whoop_path = Path("data/raw/whoop_ble_30s_vitals.csv")
-
-        if obd_path.exists() and whoop_path.exists():
-            try:
-                df_obd = pd.read_csv(obd_path)
-                df_whoop = pd.read_csv(whoop_path)
-                if not df_obd.empty and not df_whoop.empty:
-                    df_obd["datetime"] = pd.to_datetime(df_obd["timestamp"])
-                    df_whoop["datetime"] = pd.to_datetime(df_whoop["datetime"])
-                    df_merged = (
-                        pd.merge_asof(
-                            df_obd.sort_values("datetime"),
-                            df_whoop.sort_values("datetime"),
-                            on="datetime",
-                            direction="backward",
-                        )
-                        .bfill()
-                        .fillna(0)
-                    )
-                    latest_sample = df_merged.iloc[-1].to_dict()
-            except Exception:
-                pass
-
-    if not latest_sample:
-        return {"status": "waiting_for_hardware_stream"}
-
-    model_path = "artifacts/fusion_model/fusion_model.joblib"
-    scaler_path = "artifacts/fusion_model/scaler.joblib"
-
-    if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-        return {"status": "model_not_trained", "message": "Run scripts/train_fusion.py first."}
-
-    model = joblib.load(model_path)
-    scaler = joblib.load(scaler_path)
-
-    features = [
-        "speed", "rpm", "throttle_position", "engine_load_value",
-        "acceleration", "mean_hr_30s", "rmssd_30s", "sdnn_30s", "pnn50_30s"
-    ]
-
-    sample_data = {feat: float(latest_sample.get(feat, 0.0)) for feat in features}
-    
-    # Extract instant heart rate if available
-    instant_hr = float(latest_sample.get("heart_rate", sample_data["mean_hr_30s"]))
-
-    df_in = pd.DataFrame([sample_data])[features]
-    scaled = scaler.transform(df_in)
-
-    prob = float(model.predict_proba(scaled)[0][1])
-
-    real_speed = float(sample_data["speed"])
-    real_rpm = float(sample_data["rpm"])
-    real_throttle = float(sample_data["throttle_position"])
-    real_load = float(sample_data["engine_load_value"])
-    real_accel = float(sample_data["acceleration"])
-
-    lat = float(latest_sample.get("latitude", 25.2775))
-    lon = float(latest_sample.get("longitude", 55.3418))
-
-    risk_pct = int(round(prob * 100))
-
-    return {
-        "status": "active",
-        "risk": risk_pct,
-        "risk_score": round(prob, 4),
-        "risk_level": "HIGH" if prob > 0.6 else ("MODERATE" if prob > 0.35 else "LOW"),
-        "position": {
-            "lat": lat,
-            "lon": lon,
-            "name": "Live Vehicle GPS"
-        },
-        "location": {"latitude": lat, "longitude": lon},
-        "speed": int(round(real_speed)),
-        "rpm": int(round(real_rpm)),
-        "throttle": int(round(real_throttle)),
-        "engine_load": int(round(real_load)),
-        "load": int(round(real_load)),
-        "acceleration": round(real_accel, 2),
-        "ax": round(real_accel, 2),
-        "ay": 0.0,
-        "az": 9.81,
-        "heart": int(round(instant_hr)) if instant_hr > 0 else 72,
-        "event": "Live Hardware Telematics Active",
-        "live_vitals": {
-            "hr": int(round(instant_hr)) if instant_hr > 0 else 72,
-            "rmssd": sample_data["rmssd_30s"],
-            "sdnn": sample_data["sdnn_30s"],
-            "pnn50": sample_data["pnn50_30s"]
-        },
-        "live_telematics": {
-            "speed_kmh": real_speed,
-            "rpm": real_rpm,
-            "throttle": real_throttle,
-            "acceleration": real_accel
+    @app.get("/health")
+    def health() -> dict:
+        """Expose process/session/model readiness separately."""
+        return {
+            "status": "ok",
+            "session_id": engine.session_id,
+            "active": app.state.active,
+            "models_loaded": len(engine.models),
+            "calibrated": False,
         }
-    }
+
+    @app.post("/api/v1/ingest", response_model=PredictionResult | None)
+    @app.post("/ingest", response_model=PredictionResult | None)
+    def ingest(frame: SensorFrame) -> PredictionResult | None:
+        """Accept a timestamped partial sensor update."""
+        with lock:
+            return ingest_frame(frame)
+
+    @app.post("/ingest/batch")
+    def ingest_batch(batch: Batch) -> dict:
+        """Structural errors reject the request; temporal errors are reported per item.
+
+        Valid earlier items are retained if a later item is out of order.
+        """
+        with lock:
+            if not app.state.active:
+                raise HTTPException(409, "Session is stopped")
+            results = []
+            for i, frame in enumerate(batch.frames):
+                try:
+                    prediction = ingest_frame(frame)
+                    results.append({"index": i, "accepted": True, "prediction": prediction})
+                except HTTPException as exc:
+                    results.append({"index": i, "accepted": False, "error": exc.detail})
+            return {"results": results}
+
+    @app.get("/prediction/latest", response_model=PredictionResult | None)
+    def latest(stream_id: str | None = Query(None)) -> PredictionResult | None:
+        """Select a stream explicitly when more than one has predictions."""
+        with lock:
+            if stream_id:
+                return engine.latest.get(stream_id)
+            if len(engine.latest) > 1:
+                raise HTTPException(400, "Specify stream_id for multiple streams")
+            return next(iter(engine.latest.values()), None)
+
+    @app.post("/reset")
+    def reset() -> dict:
+        """Clear session buffers and previous predictions."""
+        nonlocal buffer
+        with lock:
+            engine.reset()
+            buffer = LiveBuffer()
+            if not app.state.active:
+                buffer.stop()
+            return {"session_id": engine.session_id}
+
+    @app.post("/session/start")
+    def start() -> dict:
+        """Begin a fresh independent acquisition session."""
+        with lock:
+            app.state.active = True
+            reset()
+            return {"session_id": engine.session_id, "active": True}
+
+    @app.post("/session/stop")
+    def stop() -> dict:
+        """Stop accepting packets while retaining the last prediction for inspection."""
+        with lock:
+            app.state.active = False
+            buffer.stop()
+            return {"session_id": engine.session_id, "active": False}
+
+    return app
+
+
+app = create_app()

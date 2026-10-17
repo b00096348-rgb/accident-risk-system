@@ -14,13 +14,11 @@ def test_api(models):
         demo_script = client.get("/static/app.js")
         assert demo_script.status_code == 200
         assert client.get("/static/dashboard.css").status_code == 200
-        assert 'fetch("/ingest"' in demo_script.text
-        assert "setInterval(sendTick,1000)" in demo_script.text
+        assert "live-tab" in dashboard.text and "demo-tab" in dashboard.text
         assert "actual-map" in dashboard.text
         assert "OpenStreetMap" in dashboard.text
         assert "Tire pressure" in dashboard.text
         assert "Motion & gyro" in dashboard.text
-        assert "riskOrder" in demo_script.text
         assert "tire_pressure_fl" in demo_script.text
         assert client.get("/docs").status_code == 200
         assert client.get("/health").json()["status"] == "ok"

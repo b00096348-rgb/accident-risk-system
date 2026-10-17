@@ -23,3 +23,7 @@
 .warning-reading{color:#c13d3d!important}.tire-grid dd{transition:color .2s}.risk-card{border-top:3px solid var(--risk-color,var(--green))}
 @media(max-width:1150px){.telemetry-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.real-map{height:330px;min-height:330px}.map-footer{align-items:flex-start;flex-direction:column;gap:5px}.telemetry-grid{grid-template-columns:1fr}}
+
+.mode-switch { display: flex; gap: 8px; flex-wrap: wrap; }
+.mode-switch [aria-pressed="true"] { background: #0f766e; color: white; }
+.demo-controls { flex-wrap: wrap; }
