@@ -16,7 +16,7 @@ Terminal 2 runs selected collectors. Replace the serial-port argument with your 
 python scripts/run_live_terminal.py --obd-port /dev/cu.OBDII --whoop
 ```
 
-For one device alone, use `python scripts/test_obd.py --obd-port /dev/cu.OBDII` or `python scripts/stream_whoop_ble_csv.py`. The latter filename is retained for compatibility but now streams observations only; it no longer writes CSVs or cached HRV defaults. Collectors do not write into data/raw. They do not require model files. Dependencies are imported only when their collector is selected. OBD and WHOOP reconnect attempts are logged; failed API delivery is reported and never replaced with fake data.
+For one device alone, use `python scripts/test_obd.py --obd-port /dev/cu.OBDII` or `python scripts/stream_whoop_ble_csv.py`. All three collector entry points record CSVs automatically while streaming. Each run creates a unique folder under data/recordings containing obd.csv, wearable.csv, and/or phone.csv as measurements arrive. Files are flushed after every row, so readings are available during runtime. CSV recording happens before API delivery and continues if the dashboard is offline. Existing recordings and data/raw are left untouched. No synthetic HRV defaults are recorded. They do not require model files. Dependencies are imported only when their collector is selected. OBD and WHOOP reconnect attempts are logged; failed API delivery is reported and never replaced with fake data.
 
 ## Optional phone
 
@@ -56,3 +56,9 @@ python scripts/with_openmp.py scripts/serve.py
 ```
 
 The launcher does not import PyTorch or change shell/system settings. XGBoost and PyTorch computation still run in separate processes. If the bundled runtime is unavailable, install libomp using your package manager. The ordinary `python scripts/serve.py` command works without a model and for models that do not require XGBoost.
+
+## Runtime CSV recording
+
+Recording is on by default; the terminal prints the exact folder at startup. Use `--record-dir PATH` to choose a different parent directory, or `--no-record` to explicitly disable recording. Separate collector processes create separate session folders. Each file uses canonical SensorFrame columns: `timestamp` (Unix seconds UTC), `stream_id`, `source`, sensor values, and `sensor_timestamps` (JSON original measurement times). Missing values are empty cells, not zeros. Actual zero readings remain zero. Values use the API units: vehicle_speed in m/s, acceleration in m/s², angular velocity in rad/s, heart_rate in bpm. The dashboard converts speed to km/h for display.
+
+These are observation CSVs, not the old derived 30-second WHOOP feature tables or the former OBD CSV schema. HRV summaries and other window features still belong to the shared processing pipeline; use an explicit mapping/preparation step before training or replay. No labels are invented. A recording error is prominently logged while API streaming can continue. API failure does not remove a successfully recorded row. Local recordings are excluded from Git by default. Demo-tab data is never recorded.

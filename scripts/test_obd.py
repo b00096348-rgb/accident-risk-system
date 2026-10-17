@@ -1,6 +1,7 @@
 """Stream real hardware observations to the shared API; no simulated defaults.
 
-This gateway does not write or modify data/raw.
+Readings are saved to per-run CSVs under data/recordings while streaming.
+Existing recordings and data/raw are left untouched.
 """
 
 from accident_risk.sources.hardware import main

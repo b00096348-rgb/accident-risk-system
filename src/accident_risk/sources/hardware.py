@@ -8,9 +8,11 @@ import math
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 from accident_risk.schemas import SENSOR_FIELDS, SensorFrame
+from accident_risk.sources.recording import CSVRecorder
 
 LOG = logging.getLogger(__name__)
 HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
@@ -19,7 +21,8 @@ HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 class Publisher:
     """Serialize modalities while preserving original observation times."""
 
-    def __init__(self, url: str, stream_id: str) -> None:
+    def __init__(self, url: str, stream_id: str, recorder: CSVRecorder | None = None) -> None:
+        self.recorder = recorder
         self.url = url
         self.stream_id = stream_id
         self.lock = threading.Lock()
@@ -39,6 +42,11 @@ class Publisher:
                     sensor_timestamps=times,
                     **values,
                 )
+                if self.recorder is not None:
+                    try:
+                        self.recorder.write(frame)
+                    except Exception as exc:
+                        LOG.error("CSV RECORDING FAILED for %s: %s", source, exc)
                 request = Request(
                     self.url,
                     data=frame.model_dump_json().encode(),
@@ -241,6 +249,13 @@ def main(default_obd: bool = False, default_whoop: bool = False) -> None:
     parser.add_argument("--whoop", action="store_true", default=default_whoop)
     parser.add_argument("--phone-port", type=int, help="Optional phone receiver, e.g. 8003")
     parser.add_argument("--phone-host", default="127.0.0.1")
+    parser.add_argument(
+        "--record-dir",
+        type=Path,
+        default=Path(__file__).resolve().parents[3] / "data" / "recordings",
+        help="CSV parent directory; each run creates a new session folder (default: data/recordings)",
+    )
+    parser.add_argument("--no-record", action="store_true", help="Explicitly disable CSV recording")
     args = parser.parse_args()
     if not (args.obd_port or args.whoop or args.phone_port):
         parser.error("Select --obd-port, --whoop, or --phone-port")
@@ -249,7 +264,12 @@ def main(default_obd: bool = False, default_whoop: bool = False) -> None:
     if args.phone_port == (urlparse(args.api).port or 80):
         parser.error("Phone receiver and dashboard must use different ports")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    publisher = Publisher(args.api, args.stream_id)
+    recorder = None if args.no_record else CSVRecorder(args.record_dir)
+    if recorder:
+        LOG.info("CSV recording enabled: %s (one file per source)", recorder.directory)
+    else:
+        LOG.warning("CSV recording disabled by --no-record")
+    publisher = Publisher(args.api, args.stream_id, recorder)
     stop = threading.Event()
     threads = []
     server = None
