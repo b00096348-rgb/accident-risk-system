@@ -16,7 +16,3 @@ dataset:
     label_interpretation: null
     event_timestamp_column: null
     context_columns: []
-training:
-  target: vehicle_risk_score
-  # Set explicitly to verified labels of interest after inspecting the data.
-  score_labels: []

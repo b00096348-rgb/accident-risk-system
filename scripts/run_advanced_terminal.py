@@ -1,3 +1,7 @@
+"""Real-time multimodal terminal runner for hardware ingestion and risk inference."""
+
+# pylint: disable=no-member
+
 import asyncio
 import datetime
 import json
@@ -6,6 +10,7 @@ import os
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import joblib
@@ -13,6 +18,8 @@ import numpy as np
 import obd
 import pandas as pd
 from bleak import BleakClient, BleakScanner
+
+from accident_risk.processing.map_context import MapContextResolver
 
 # Path Configuration
 FUSION_MODEL_PATH = "artifacts/fusion_model/fusion_model.joblib"
@@ -24,6 +31,9 @@ BENCHMARK_SCALER_PATH = "artifacts/benchmark_models/benchmark_scaler.joblib"
 OBD_PORT = "/dev/cu.OBDII"
 HEART_RATE_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 CLASS_MAP = {0: "CRASH (Class 0)", 1: "NEAR-MISS (Class 1)", 2: "NORMAL (Class 2)"}
+
+# Target URL for serve.py
+SERVE_INGEST_URL = "http://127.0.0.1:8000/ingest"
 
 # Maximum allowed delay between live hardware packets (seconds)
 HARDWARE_TIMEOUT_SEC = 5.0
@@ -59,7 +69,11 @@ live_state = {
 # 1. Robust Background HTTP Receiver for Sensor Logger App
 # =========================================================
 class AndroidIngestHandler(BaseHTTPRequestHandler):
+    """Handler for incoming Android Sensor Logger HTTP POST payloads."""
+
+    # pylint: disable=invalid-name
     def do_POST(self):
+        """Handle HTTP POST requests containing sensor telemetry frames."""
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
         now = time.time()
@@ -67,7 +81,6 @@ class AndroidIngestHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(body.decode("utf-8"))
 
-            # Normalize array vs object payloads from different apps
             if isinstance(payload, list):
                 frames = payload
             elif (
@@ -86,7 +99,6 @@ class AndroidIngestHandler(BaseHTTPRequestHandler):
                     if not isinstance(frame, dict):
                         continue
 
-                    # Structure A: Sensor Logger format {"name": "location", "values": {"latitude": ...}}
                     sensor_name = str(frame.get("name", "")).lower()
                     values = (
                         frame.get("values", {})
@@ -132,7 +144,6 @@ class AndroidIngestHandler(BaseHTTPRequestHandler):
                         )
                         live_state["last_android_time"] = now
 
-                    # Structure B: Flat JSON format {"latitude": 25.32, "accel_x": 0.1}
                     lat = (
                         frame.get("latitude")
                         or frame.get("gps_latitude")
@@ -165,17 +176,20 @@ class AndroidIngestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
+        # pylint: disable=broad-exception-caught
         except Exception:
             self.send_response(400)
             self.end_headers()
 
+    # pylint: disable=arguments-differ,redefined-builtin
     def log_message(self, format, *args):
-        return  # Keep console output clean
+        """Suppress standard HTTP server logging to keep terminal output clean."""
+        _ = format, args
 
 
 def start_android_receiver():
-    """Run background HTTP server on port 8000 for Android Sensor Logger payloads."""
-    server = HTTPServer(("0.0.0.0", 8000), AndroidIngestHandler)
+    """Run background HTTP server on port 8003 for Android Sensor Logger payloads."""
+    server = HTTPServer(("0.0.0.0", 8003), AndroidIngestHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
@@ -184,15 +198,20 @@ def start_android_receiver():
 # 2. Background Thread for WHOOP BLE Vitals
 # =========================================================
 class WhoopBLEThread(threading.Thread):
+    """Background thread for discovering and reading WHOOP BLE vitals."""
+
     def __init__(self):
         super().__init__(daemon=True)
         self.bpm_buffer = []
         self.rr_buffer = []
 
     def run(self):
+        """Execute the asynchronous BLE event loop."""
         asyncio.run(self.ble_main())
 
     async def ble_main(self):
+        """Discover WHOOP band and subscribe to heart rate notifications."""
+        # pylint: disable=broad-exception-caught
         try:
             devices = await BleakScanner.discover()
             whoop_dev = next(
@@ -212,7 +231,8 @@ class WhoopBLEThread(threading.Thread):
         except Exception as e:
             print(f"⚠️ WHOOP BLE Connection error: {e}")
 
-    def parse_ble(self, sender, data: bytearray):
+    def parse_ble(self, _sender, data: bytearray):
+        """Parse raw BLE heart rate measurement bytes."""
         if not data:
             return
         flags = data[0]
@@ -235,6 +255,7 @@ class WhoopBLEThread(threading.Thread):
                 offset += 2
 
     def compute_vitals(self):
+        """Compute rolling 30-second HR and HRV statistics."""
         if not self.bpm_buffer:
             return
         mean_hr = float(np.mean(self.bpm_buffer))
@@ -259,16 +280,15 @@ class WhoopBLEThread(threading.Thread):
 # 3. Main Real-Time Engine with Live Connection Gate
 # =========================================================
 def main():
+    """Main execution loop for real-time multimodal inference stream."""
     if not os.path.exists(BENCHMARK_MODEL_PATH) or not os.path.exists(
         FUSION_MODEL_PATH
     ):
-        print(
-            "❌ Model files missing! Run 'python scripts/train_fusion.py' and 'python scripts/train_vzcrash_3class.py' first."
-        )
+        print("❌ Model files missing! Run training scripts first.")
         sys.exit(1)
 
     print(
-        "🧠 Loading Model Artifacts (Fusion, VZCrash Benchmark, & Anomaly Detector)..."
+        "🧠 Loading Model Artifacts (POLIDriving Fusion, VZCrash Benchmark, & Anomaly Detector)..."
     )
     fusion_model = joblib.load(FUSION_MODEL_PATH)
     fusion_scaler = joblib.load(FUSION_SCALER_PATH)
@@ -277,7 +297,9 @@ def main():
     anomaly_model = joblib.load(ANOMALY_MODEL_PATH)
     benchmark_scaler = joblib.load(BENCHMARK_SCALER_PATH)
 
-    print("📡 Listening for Android Sensor Logger on port 8000...")
+    map_resolver = MapContextResolver()
+
+    print("📡 Listening for Android Sensor Logger on port 8003...")
     start_android_receiver()
 
     print("🔍 Searching for WHOOP BLE Band...")
@@ -314,7 +336,6 @@ def main():
             t_now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
             current_time = time.time()
 
-            # A. OBD-II ECU Sampling
             speed_kmh, rpm, throttle, load = 0.0, 0.0, 0.0, 0.0
             obd_responsive = False
 
@@ -340,7 +361,6 @@ def main():
                     with state_lock:
                         live_state["last_obd_time"] = current_time
 
-            # B. Acceleration Calculation
             speed_mps = speed_kmh * (1000.0 / 3600.0)
             accel_obd = 0.0
             if prev_speed_mps is not None and prev_time is not None:
@@ -350,7 +370,6 @@ def main():
             prev_speed_mps = speed_mps
             prev_time = current_time
 
-            # C. Read Thread-Safe State & Hardware Ages
             with state_lock:
                 lat = live_state["lat"]
                 lon = live_state["lon"]
@@ -380,7 +399,8 @@ def main():
                     and obd_responsive
                 )
 
-            # D. Hardware Connection Gate Validation
+            in_roundabout = map_resolver.is_in_roundabout(lat, lon)
+
             if not (obd_active and whoop_active and android_active):
                 status_obd = "🟢 OK" if obd_active else "🔴 DISCONNECTED"
                 status_whoop = "🟢 OK" if whoop_active else "🔴 DISCONNECTED"
@@ -390,12 +410,13 @@ def main():
 
                 print(
                     f"[{t_now}] ⚠️ INFERENCE PAUSED | Hardware Status: "
-                    f"OBD-II: {status_obd} | WHOOP: {status_whoop} | Android Sensor: {status_android}"
+                    f"OBD-II: {status_obd} | WHOOP: {status_whoop} | "
+                    f"Android Sensor: {status_android}"
                 )
                 time.sleep(1.0)
                 continue
 
-            # E. All Hardware Verified -> Model Inference
+            # --- 1. POLIDRIVING REGRESSION/RISK MODEL ---
             fusion_df = pd.DataFrame(
                 [
                     {
@@ -412,42 +433,96 @@ def main():
                 ]
             )[fusion_cols]
 
-            fusion_prob = float(
+            polidriving_risk = float(
                 fusion_model.predict_proba(
                     fusion_scaler.transform(fusion_df)
                 )[0][1]
             )
 
-            # F. VZCrash Benchmark Prediction
+            # --- 2. VZCRASH CLASSIFICATION MODEL ---
             benchmark_sample = np.array(
                 [[accel_mag, gyro_mag, speed_kmh, abs(accel_obd)]]
             )
             benchmark_scaled = benchmark_scaler.transform(benchmark_sample)
-            class_pred = int(benchmark_model.predict(benchmark_scaled)[0])
-            class_label = CLASS_MAP[class_pred]
 
-            # G. Unsupervised Anomaly Prediction
-            is_anomaly = anomaly_model.predict(benchmark_scaled)[0] == -1
+            vz_probs = benchmark_model.predict_proba(benchmark_scaled)[0]
+            class_pred = int(np.argmax(vz_probs))
 
-            # Independent Colors
-            if class_pred == 0:
-                vz_color = "\033[91m"  # Red for Crash
-            elif class_pred == 1:
-                vz_color = "\033[93m"  # Yellow for Near-Miss
+            # Convert 3-class VZCrash probabilities into continuous risk (0.0 - 1.0)
+            p_crash, p_near_miss, p_normal = vz_probs[0], vz_probs[1], vz_probs[2]
+            vzcrash_risk = float(1.0 * p_crash + 0.6 * p_near_miss)
+
+            # --- 3. DUAL-DATASET MULTIMODAL FUSED RISK SCORE ---
+            # 50% POLIDriving (Telematics & Vitals) + 50% VZCrash (Kinematics)
+            weight_polidriving = 0.5
+            weight_vzcrash = 0.5
+
+            fused_risk_score = (
+                (weight_polidriving * polidriving_risk) + (weight_vzcrash * vzcrash_risk)
+            ) * 100.0
+
+            # --- 4. ROUNDABOUT SUPPRESSION OVERRIDE ---
+            if in_roundabout and class_pred in (0, 1):
+                if accel_mag < 25.0 and abs(accel_obd) < 15.0:
+                    class_pred = 2
+                    class_label = "NORMAL (Roundabout Curve)"
+                    fused_risk_score = min(fused_risk_score, 15.0)
+                else:
+                    class_label = CLASS_MAP[class_pred]
             else:
-                vz_color = "\033[92m"  # Green for Normal
+                class_label = CLASS_MAP[class_pred]
+
+            is_anomaly = anomaly_model.predict(benchmark_scaled)[0] == -1
+            if in_roundabout and is_anomaly and accel_mag < 25.0:
+                is_anomaly = False
+
+            # --- 5. TERMINAL LOG FORMATTING ---
+            if fused_risk_score >= 60.0:
+                score_color = "\033[91m"  # Red
+            elif fused_risk_score >= 30.0:
+                score_color = "\033[93m"  # Yellow
+            else:
+                score_color = "\033[92m"  # Green
 
             anomaly_color = "\033[91m" if is_anomaly else "\033[92m"
             reset = "\033[0m"
+            rb_tag = " 🔄 [ROUNDABOUT]" if in_roundabout else ""
 
             print(
-                f"[{t_now}] 📍 Lat:{lat:.6f}, Lon:{lon:.6f} | "
+                f"[{t_now}] 📍 Lat:{lat:.6f}, Lon:{lon:.6f}{rb_tag} | "
                 f"🚗 Speed:{speed_kmh:4.1f}km/h | RPM:{rpm:4.0f} | "
                 f"🫀 HR:{hr:3.0f}bpm | "
-                f"🎯 Fusion Risk:{fusion_prob*100:5.1f}% | "
-                f"🏆 VZCrash:{vz_color}{class_label}{reset} | "
+                f"🎯 Combined Risk:{score_color}{fused_risk_score:5.1f}%{reset} | "
+                f"🏆 VZCrash:{class_label} | "
                 f"🔍 Anomaly:{anomaly_color}{'YES' if is_anomaly else 'NO'}{reset}"
             )
+
+            # --- POST FRAME TO SERVE.PY FOR DASHBOARD DISPLAY ---
+            ingest_payload = {
+                "timestamp": current_time,
+                "stream_id": "hardware",
+                "source": "advanced_terminal",
+                "vehicle_speed": float(speed_mps),
+                "rpm": float(rpm) if rpm > 0 else None,
+                "throttle_position": float(throttle) if throttle > 0 else None,
+                "engine_load": float(load) if load > 0 else None,
+                "gps_latitude": float(lat) if lat != 0.0 else None,
+                "gps_longitude": float(lon) if lon != 0.0 else None,
+                "heart_rate": float(hr) if hr > 0 else None,
+                "accel_x": float(accel_mag) if accel_mag > 0 else None,
+                "gyro_z": float(gyro_mag) if gyro_mag > 0 else None,
+            }
+
+            try:
+                req = urllib.request.Request(
+                    SERVE_INGEST_URL,
+                    data=json.dumps(ingest_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=0.5) as res:
+                    pass
+            except Exception:
+                pass  # Ignore API connection failures so the terminal continues
 
             time.sleep(0.5)
 

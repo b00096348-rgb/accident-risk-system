@@ -1,5 +1,7 @@
 """Wire schema: timestamps are finite Unix seconds UTC; sensors use documented units."""
 
+# pylint: disable=no-member,not-an-iterable
+
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -60,6 +62,7 @@ class SensorFrame(BaseModel):
         None, description="Actual RR/IBI interval, ms; never derived from BPM"
     )
     physiology_signal_quality: Score | None = None
+    is_roundabout: bool | None = Field(None, description="True if vehicle is inside a roundabout")
     sensor_timestamps: dict[str, Annotated[Finite, Field(ge=0)]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -103,3 +106,4 @@ class PredictionResult(BaseModel):
     quality_flags: list[str] = Field(default_factory=list)
     sensor_age_seconds: dict[str, float] = Field(default_factory=dict)
     inference_latency_ms: float = Field(ge=0)
+    

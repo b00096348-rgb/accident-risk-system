@@ -1,5 +1,6 @@
 """Deterministic features from unique past sensor observations, with stable names."""
 
+import math
 import numpy as np
 
 from accident_risk.processing.windows import Window
@@ -20,7 +21,7 @@ def series(window: Window, field: str) -> tuple[np.ndarray, np.ndarray]:
 def statistics(name: str, times: np.ndarray, values: np.ndarray) -> dict[str, float]:
     """Population standard deviation and least-squares slope per second; NaN if absent."""
     keys = ("mean", "std", "min", "max", "delta", "slope")
-    if not len(values):
+    if len(values) == 0:
         return {f"{name}_{key}": float("nan") for key in keys}
     centered = times - times.mean()
     slope = (
@@ -97,4 +98,18 @@ def vehicle_features(
     features["gyro_variance"] = features["gyroscope_magnitude_std"] ** 2
     # z-axis angular-rate delta is not physical yaw without known mounting.
     features["device_z_rotation_rate_change"] = features["gyro_z_delta"]
+
+    # --- ROUNDABOUT CONTEXT LOGIC ---
+    latest_frame = window.frames[-1] if window.frames else None
+    in_roundabout = (
+        1.0 if (latest_frame and getattr(latest_frame, "is_roundabout", False)) else 0.0
+    )
+    features["is_roundabout"] = in_roundabout
+
+    # If jerk is low (< 4 m/s^3) during a roundabout turn, flag for false-positive suppression
+    max_jerk = features.get("jerk_max", 0.0)
+    features["roundabout_risk_suppressor"] = (
+        1.0 if (in_roundabout == 1.0 and (math.isnan(max_jerk) or max_jerk < 4.0)) else 0.0
+    )
+
     return features

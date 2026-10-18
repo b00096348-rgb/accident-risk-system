@@ -14,6 +14,7 @@ from accident_risk.logging_utils import configure_logging
 from accident_risk.models.fusion import RiskFusion
 from accident_risk.models.physiology_model import PhysiologyModel
 from accident_risk.models.vehicle_model import VehicleModel
+from accident_risk.processing.map_context import MapContextResolver
 from accident_risk.schemas import SENSOR_FIELDS, PredictionResult, SensorFrame
 from accident_risk.settings import EnvironmentSettings, PipelineSettings, load_config
 from accident_risk.sources.live_buffer import LiveBuffer
@@ -41,26 +42,34 @@ def create_app(engine: InferenceEngine | None = None) -> FastAPI:
             else PipelineSettings(**config.get("pipeline", {})),
             fusion=RiskFusion(**config.get("fusion", {})),
         )
-    app = FastAPI(title="Accident-risk research API", version="0.1.0")
+    application = FastAPI(title="Accident-risk research API", version="0.1.0")
     buffer = LiveBuffer()
     lock = RLock()
-    app.state.engine = engine
-    app.state.active = True
+    map_resolver = MapContextResolver()
+    application.state.engine = engine
+    application.state.active = True
     static_dir = Path(__file__).with_name("static")
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    application.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-    @app.get("/", include_in_schema=False)
+    @application.get("/", include_in_schema=False)
     def dashboard() -> FileResponse:
         """Serve the approachable live monitoring dashboard."""
         return FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-store"})
 
     def ingest_frame(frame: SensorFrame) -> PredictionResult | None:
         """Consume immediately under the session lock; slow modalities never gate ingestion."""
-        if not app.state.active:
+        if not application.state.active:
             raise HTTPException(409, "Session is stopped; POST /session/start")
         try:
             if frame.timestamp > time.time() + 1:
                 raise ValueError("Timestamp is in the future; use Unix seconds UTC")
+
+            if frame.gps_latitude is not None and frame.gps_longitude is not None:
+                in_roundabout = map_resolver.is_in_roundabout(
+                    frame.gps_latitude, frame.gps_longitude
+                )
+                frame = frame.model_copy(update={"is_roundabout": in_roundabout})
+
             buffer.push(frame)
             result = None
             for pending in buffer:
@@ -69,7 +78,7 @@ def create_app(engine: InferenceEngine | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
-    @app.get("/api/v1/predict/live")
+    @application.get("/api/v1/predict/live")
     def live_dashboard(stream_id: str | None = Query(None)) -> dict:
         """Display actual observations with the same per-channel expiry as inference."""
         with lock:
@@ -88,17 +97,16 @@ def create_app(engine: InferenceEngine | None = None) -> FastAPI:
                 if fresh
                 else ("stale" if stream_id in sync.values else "waiting_for_hardware_stream")
             )
-            if not app.state.active:
+            if not application.state.active:
                 status = "stopped"
                 fields = {key: None for key in SENSOR_FIELDS}
             prediction = engine.latest.get(stream_id)
             score = None
-            # Never keep a score alive after its inputs expire or the session stops.
             prediction_fresh = (
                 prediction is not None
                 and 0 <= now - prediction.timestamp <= engine.settings.default_max_age_seconds
             )
-            if fresh and app.state.active and prediction_fresh:
+            if fresh and application.state.active and prediction_fresh:
                 score = prediction.overall_risk_index
             result = {
                 "status": status,
@@ -144,32 +152,32 @@ def create_app(engine: InferenceEngine | None = None) -> FastAPI:
                 result[key] = fields[key]
             return result
 
-    @app.get("/health")
+    @application.get("/health")
     def health() -> dict:
         """Expose process/session/model readiness separately."""
         return {
             "status": "ok",
             "session_id": engine.session_id,
-            "active": app.state.active,
+            "active": application.state.active,
             "models_loaded": len(engine.models),
             "calibrated": False,
         }
 
-    @app.post("/api/v1/ingest", response_model=PredictionResult | None)
-    @app.post("/ingest", response_model=PredictionResult | None)
+    @application.post("/api/v1/ingest", response_model=PredictionResult | None)
+    @application.post("/ingest", response_model=PredictionResult | None)
     def ingest(frame: SensorFrame) -> PredictionResult | None:
         """Accept a timestamped partial sensor update."""
         with lock:
             return ingest_frame(frame)
 
-    @app.post("/ingest/batch")
+    @application.post("/ingest/batch")
     def ingest_batch(batch: Batch) -> dict:
         """Structural errors reject the request; temporal errors are reported per item.
 
         Valid earlier items are retained if a later item is out of order.
         """
         with lock:
-            if not app.state.active:
+            if not application.state.active:
                 raise HTTPException(409, "Session is stopped")
             results = []
             for i, frame in enumerate(batch.frames):
@@ -180,7 +188,7 @@ def create_app(engine: InferenceEngine | None = None) -> FastAPI:
                     results.append({"index": i, "accepted": False, "error": exc.detail})
             return {"results": results}
 
-    @app.get("/prediction/latest", response_model=PredictionResult | None)
+    @application.get("/prediction/latest", response_model=PredictionResult | None)
     def latest(stream_id: str | None = Query(None)) -> PredictionResult | None:
         """Select a stream explicitly when more than one has predictions."""
         with lock:
@@ -190,34 +198,34 @@ def create_app(engine: InferenceEngine | None = None) -> FastAPI:
                 raise HTTPException(400, "Specify stream_id for multiple streams")
             return next(iter(engine.latest.values()), None)
 
-    @app.post("/reset")
+    @application.post("/reset")
     def reset() -> dict:
         """Clear session buffers and previous predictions."""
         nonlocal buffer
         with lock:
             engine.reset()
             buffer = LiveBuffer()
-            if not app.state.active:
+            if not application.state.active:
                 buffer.stop()
             return {"session_id": engine.session_id}
 
-    @app.post("/session/start")
+    @application.post("/session/start")
     def start() -> dict:
         """Begin a fresh independent acquisition session."""
         with lock:
-            app.state.active = True
+            application.state.active = True
             reset()
             return {"session_id": engine.session_id, "active": True}
 
-    @app.post("/session/stop")
+    @application.post("/session/stop")
     def stop() -> dict:
         """Stop accepting packets while retaining the last prediction for inspection."""
         with lock:
-            app.state.active = False
+            application.state.active = False
             buffer.stop()
             return {"session_id": engine.session_id, "active": False}
 
-    return app
+    return application
 
 
 app = create_app()
