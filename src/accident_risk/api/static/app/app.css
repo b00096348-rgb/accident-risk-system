@@ -1,0 +1,265 @@
+/* RoadSense application shell.
+   Extends the tokens already used by the research dashboard so the two
+   surfaces read as one product. Structure differs on purpose: this is an
+   operational console, and the driver view has to be legible at arm's length
+   inside a moving car. */
+
+:root {
+  --ink: #12332f;
+  --muted: #5d7470;
+  --line: #dce8e5;
+  --paper: #fff;
+  --wash: #f3f8f6;
+  --teal: #0f766e;
+  --teal-dark: #0a5a54;
+  --green: #20a574;
+  --amber: #d89424;
+  --orange: #e2703a;
+  --red: #c93f3f;
+  --shadow: 0 14px 40px rgba(26, 61, 56, .08);
+
+  --low: var(--green);
+  --medium: var(--amber);
+  --high: var(--orange);
+  --critical: var(--red);
+
+  font-family: Inter, Avenir, "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: radial-gradient(circle at 15% 0, #e4f4ef 0, transparent 32rem), var(--wash);
+}
+
+button, a, input, select { font: inherit; }
+button { cursor: pointer; }
+svg { display: block; stroke: currentColor; fill: none; stroke-width: 1.8;
+      stroke-linecap: round; stroke-linejoin: round; }
+h1, h2, h3 { letter-spacing: -.025em; margin: 0; }
+[hidden] { display: none !important; }
+
+:focus-visible { outline: 3px solid rgba(15, 118, 110, .45); outline-offset: 3px; }
+
+/* ───────────────────────────────── buttons ─────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 18px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  font-weight: 650; font-size: 14px;
+  transition: background .18s, border-color .18s, box-shadow .18s;
+}
+.btn:hover { border-color: #a9d0ca; }
+.btn.primary { background: var(--teal); border-color: var(--teal); color: #fff;
+               box-shadow: 0 8px 18px rgba(15, 118, 110, .18); }
+.btn.primary:hover { background: var(--teal-dark); }
+.btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.danger:hover { background: #ab3030; }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.quiet:hover { color: var(--ink); background: rgba(15, 118, 110, .07); }
+.btn.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
+.btn.big { min-height: 60px; font-size: 17px; width: 100%; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ───────────────────────────────── sign in ─────────────────────────────── */
+.signin { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.signin-panel {
+  width: min(410px, 100%); padding: 38px 32px 32px; text-align: center;
+  border: 1px solid var(--line); border-radius: 24px; background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.mark { display: grid; place-items: center; width: 54px; height: 54px; margin: 0 auto 18px;
+        border-radius: 17px; background: var(--teal); color: #fff;
+        box-shadow: 0 8px 18px rgba(15, 118, 110, .22); }
+.mark svg { width: 31px; }
+.mark.small { width: 38px; height: 38px; border-radius: 12px; margin: 0; }
+.mark.small svg { width: 22px; }
+.signin h1 { font-size: 27px; }
+.signin .sub { margin: 8px 0 26px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.stack { display: grid; gap: 10px; text-align: left; }
+.stack label { font-size: 13px; font-weight: 650; }
+.stack input, .field input, .field select {
+  width: 100%; min-height: 46px; padding: 0 14px; border: 1px solid var(--line);
+  border-radius: 12px; background: #fbfdfc; color: var(--ink);
+}
+.stack input:focus, .field input:focus, .field select:focus {
+  border-color: var(--teal); background: #fff;
+}
+#code { font-size: 25px; letter-spacing: .34em; text-align: center; font-variant-numeric: tabular-nums; }
+.hint { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.form-error { margin: 16px 0 0; padding: 11px 13px; border-radius: 11px;
+              background: #fbeaea; color: #8f2b2b; font-size: 13px; text-align: left; }
+
+/* ──────────────────────────────── app shell ────────────────────────────── */
+.shell { min-height: 100dvh; max-width: 1480px; margin: auto;
+         padding: 16px 28px calc(28px + env(safe-area-inset-bottom)); }
+.topbar { display: flex; justify-content: space-between; align-items: center; height: 64px; }
+.brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--ink); }
+.brand-text strong { display: block; font-size: 17px; letter-spacing: -.02em; }
+.brand-text small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.who { color: var(--muted); font-size: 13px; }
+
+.nav { display: flex; gap: 4px; padding: 6px; margin: 6px 0 20px; overflow-x: auto;
+       border: 1px solid var(--line); border-radius: 15px; background: rgba(255, 255, 255, .8); }
+.nav button {
+  flex: 0 0 auto; min-height: 38px; padding: 0 15px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--muted); font-size: 14px; font-weight: 600;
+  transition: background .18s, color .18s;
+}
+.nav button:hover { color: var(--ink); background: rgba(15, 118, 110, .07); }
+.nav button[aria-current="page"] { background: var(--teal); color: #fff; }
+
+/* ──────────────────────────────── surfaces ─────────────────────────────── */
+.card { border: 1px solid rgba(204, 222, 218, .9); border-radius: 20px;
+        background: rgba(255, 255, 255, .94); box-shadow: var(--shadow); padding: 22px; }
+.card + .card, .grid + .card, .card + .grid { margin-top: 18px; }
+.card h2 { font-size: 17px; }
+.card-head { display: flex; justify-content: space-between; align-items: center;
+             gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+.grid { display: grid; gap: 18px; }
+.grid.two { grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); }
+.grid.halves { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* Driver layout. On a phone the controls come before the readings, because the
+   first thing someone does in the car is start the session. */
+.drive-grid { display: grid; gap: 18px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(290px, 1fr);
+  grid-template-areas: "risk session" "readings kit"; align-items: start; }
+.area-risk { grid-area: risk; }
+.area-session { grid-area: session; }
+.area-readings { grid-area: readings; }
+.area-kit { grid-area: kit; }
+
+.muted { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.empty { padding: 34px 18px; text-align: center; color: var(--muted); font-size: 14px; }
+.empty strong { display: block; margin-bottom: 6px; color: var(--ink); font-size: 15px; }
+
+/* ──────────────────────────── driver risk panel ────────────────────────── */
+/* The one loud element. Everything else on the driver screen stays quiet. */
+.risk {
+  position: relative; overflow: hidden; padding: 30px 26px;
+  border: 1px solid var(--line); border-radius: 22px; background: var(--paper);
+  border-top: 5px solid var(--state, var(--muted)); box-shadow: var(--shadow);
+}
+.risk-state { font-size: clamp(42px, 11vw, 74px); font-weight: 760; line-height: .95;
+              letter-spacing: -.045em; color: var(--state, var(--muted)); }
+.risk-index { margin-top: 10px; font-size: 15px; color: var(--muted);
+              font-variant-numeric: tabular-nums; }
+.risk-note { margin: 16px 0 0; font-size: 13px; color: var(--muted); line-height: 1.55;
+             max-width: 48ch; }
+.bands { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 20px; }
+.bands span { height: 6px; border-radius: 6px; background: #e4ebe9; }
+.bands span.on:nth-child(1) { background: var(--low); }
+.bands span.on:nth-child(2) { background: var(--medium); }
+.bands span.on:nth-child(3) { background: var(--high); }
+.bands span.on:nth-child(4) { background: var(--critical); }
+
+/* ─────────────────────────────── link status ───────────────────────────── */
+.links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.link-chip { display: flex; align-items: center; gap: 10px; padding: 13px 14px;
+             border: 1px solid var(--line); border-radius: 14px; background: #fbfdfc; }
+.dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: #b3bdbb; }
+.link-chip.on .dot { background: var(--green); box-shadow: 0 0 0 4px rgba(32, 165, 116, .14); }
+.link-chip.off .dot { background: var(--red); box-shadow: 0 0 0 4px rgba(201, 63, 63, .12); }
+.link-chip strong { display: block; font-size: 13px; }
+.link-chip small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+
+/* ──────────────────────────────── readouts ─────────────────────────────── */
+.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 12px; }
+.readout { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fbfdfc; }
+.readout small { display: block; color: var(--muted); font-size: 11px; }
+.readout strong { display: block; margin-top: 5px; font-size: 25px; letter-spacing: -.035em;
+                  font-variant-numeric: tabular-nums; }
+.readout strong em { font-size: 13px; font-style: normal; font-weight: 600; color: var(--muted); }
+
+/* ───────────────────────────────── tables ──────────────────────────────── */
+.table-wrap { overflow-x: auto; margin: 0 -4px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { padding: 11px 10px; text-align: left; border-bottom: 1px solid var(--line);
+         white-space: nowrap; }
+th { color: var(--muted); font-size: 12px; font-weight: 650; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: #f6fbfa; }
+td.num { font-variant-numeric: tabular-nums; }
+
+/* ───────────────────────────────── pills ───────────────────────────────── */
+.pill { display: inline-block; padding: 4px 10px; border-radius: 999px;
+        font-size: 12px; font-weight: 650; background: #eef3f2; color: var(--muted); }
+.pill.low { background: rgba(32, 165, 116, .13); color: #15754f; }
+.pill.medium { background: rgba(216, 148, 36, .16); color: #8a5c0d; }
+.pill.high { background: rgba(226, 112, 58, .16); color: #9c431a; }
+.pill.critical { background: rgba(201, 63, 63, .14); color: #8f2b2b; }
+.pill.pending { background: rgba(216, 148, 36, .16); color: #8a5c0d; }
+.pill.confirmed { background: rgba(201, 63, 63, .14); color: #8f2b2b; }
+.pill.cancelled { background: #eef3f2; color: var(--muted); }
+.pill.active { background: rgba(32, 165, 116, .13); color: #15754f; }
+.pill.spare { background: #eef3f2; color: var(--muted); }
+.pill.out_of_service { background: rgba(201, 63, 63, .14); color: #8f2b2b; }
+
+/* ────────────────────────────────── map ────────────────────────────────── */
+.map-frame { position: relative; }
+#map { height: 500px; border-radius: 16px; border: 1px solid var(--line);
+       background: #eef6f3; z-index: 0; }
+/* Shown until Leaflet paints, and left in place if the map never loads.
+   The pilot may well drive with no connectivity. */
+.map-fallback { position: absolute; inset: 0; z-index: 1; display: grid; place-content: center;
+                gap: 6px; padding: 24px; text-align: center; border-radius: 16px;
+                background: #eef6f3; color: var(--muted); font-size: 13px; }
+.map-fallback strong { color: var(--ink); font-size: 15px; }
+.map-pin { display: grid; place-items: center; width: 34px; height: 34px; border: 3px solid #fff;
+           border-radius: 50%; background: var(--teal); color: #fff; font-size: 12px;
+           font-weight: 750; box-shadow: 0 5px 16px rgba(18, 51, 47, .35); }
+.leaflet-control-attribution { font-size: 9px !important; }
+
+/* ───────────────────────────────── forms ───────────────────────────────── */
+.field { display: grid; gap: 6px; }
+.field label { font-size: 12px; font-weight: 650; color: var(--muted); }
+.form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 12px; align-items: end; }
+
+/* ──────────────────────────── collision takeover ───────────────────────── */
+/* Opaque enough on its own: backdrop-filter is a bonus, never the contrast. */
+.takeover { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center;
+            padding: 22px; background: rgba(10, 30, 27, .9); }
+@supports (backdrop-filter: blur(4px)) { .takeover { backdrop-filter: blur(5px); } }
+.takeover-panel { width: min(430px, 100%); padding: 32px 26px; text-align: center;
+                  border-radius: 24px; background: var(--paper); box-shadow: 0 30px 70px rgba(0,0,0,.35); }
+.takeover-panel h2 { font-size: 24px; color: var(--red); }
+.takeover-panel p { margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.countdown { display: grid; place-items: center; width: 108px; height: 108px; margin: 22px auto;
+             border: 5px solid var(--red); border-radius: 50%; font-size: 42px; font-weight: 760;
+             color: var(--red); font-variant-numeric: tabular-nums; }
+.takeover-panel .btn + .btn { margin-top: 10px; }
+
+/* ───────────────────────────────── toast ───────────────────────────────── */
+.toast { position: fixed; left: 50%; bottom: 24px; z-index: 950;
+         transform: translate(-50%, 18px); padding: 12px 17px; border-radius: 12px;
+         background: #173d38; color: #fff; font-size: 13px; opacity: 0; pointer-events: none;
+         transition: opacity .2s, transform .2s; box-shadow: 0 10px 30px rgba(0, 0, 0, .22); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.bad { background: #8f2b2b; }
+
+/* ─────────────────────────────── responsive ────────────────────────────── */
+@media (max-width: 920px) {
+  .grid.two, .grid.halves { grid-template-columns: 1fr; }
+  .drive-grid { grid-template-columns: 1fr;
+                grid-template-areas: "risk" "session" "readings" "kit"; }
+  .links { grid-template-columns: repeat(3, 1fr); }
+  #map { height: 380px; }
+}
+@media (max-width: 520px) { .links { grid-template-columns: 1fr; } }
+@media (max-width: 620px) {
+  .shell { padding: 12px 16px calc(20px + env(safe-area-inset-bottom)); }
+  .card { padding: 17px; border-radius: 16px; }
+  .who { display: none; }
+  .risk { padding: 24px 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}

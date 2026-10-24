@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="RoadSense driver and operator interface">
+<title>RoadSense</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<link rel="stylesheet" href="/static/app/app.css">
+</head>
+<body data-view="loading">
+
+<!-- ───────────────────────────────── sign in ───────────────────────────── -->
+<section id="signin" class="signin" hidden>
+  <div class="signin-panel">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 2 3.5 5.5v5.9c0 5.2 3.6 9.3 8.5 10.6 4.9-1.3 8.5-5.4 8.5-10.6V5.5L12 2Z"/><path d="m8.4 12 2.2 2.2 5-5"/></svg>
+    </div>
+    <h1>RoadSense</h1>
+    <p class="sub">Driving risk monitoring for the UAE pilot study.</p>
+
+    <form id="phone-form" class="stack" novalidate>
+      <label for="phone">Mobile number</label>
+      <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel"
+             placeholder="+971 50 123 4567" required>
+      <button class="btn primary" type="submit">Send me a code</button>
+      <p class="hint">We text you a six-digit code. There is no password to remember.</p>
+    </form>
+
+    <form id="code-form" class="stack" novalidate hidden>
+      <label for="code">Six-digit code</label>
+      <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="6" placeholder="000000" required>
+      <button class="btn primary" type="submit">Sign in</button>
+      <button class="btn quiet" type="button" id="change-phone">Use a different number</button>
+      <p class="hint" id="code-hint"></p>
+    </form>
+
+    <p class="form-error" id="signin-error" role="alert" hidden></p>
+  </div>
+</section>
+
+<!-- ───────────────────────────────── app shell ─────────────────────────── -->
+<div id="shell" class="shell" hidden>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <span class="mark small" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 2 3.5 5.5v5.9c0 5.2 3.6 9.3 8.5 10.6 4.9-1.3 8.5-5.4 8.5-10.6V5.5L12 2Z"/><path d="m8.4 12 2.2 2.2 5-5"/></svg>
+      </span>
+      <span class="brand-text"><strong>RoadSense</strong><small id="role-label">—</small></span>
+    </a>
+    <div class="topbar-right">
+      <span class="who" id="who-name"></span>
+      <button class="btn quiet small" id="signout" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="nav" id="nav" aria-label="Sections"></nav>
+
+  <main id="main" tabindex="-1"></main>
+</div>
+
+<!-- ─────────────────────────── collision takeover ──────────────────────── -->
+<div id="collision" class="takeover" hidden role="alertdialog"
+     aria-labelledby="collision-title" aria-describedby="collision-body">
+  <div class="takeover-panel">
+    <h2 id="collision-title">Possible collision detected</h2>
+    <p id="collision-body">An emergency alert goes to your account manager unless you cancel it.</p>
+    <div class="countdown" aria-hidden="true"><span id="collision-count">20</span></div>
+    <button class="btn danger big" id="collision-cancel" type="button">
+      I'm fine — cancel the alert
+    </button>
+    <button class="btn quiet" id="collision-confirm" type="button">Send it now</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+<script src="/static/app/app.js" defer></script>
+</body>
+</html>

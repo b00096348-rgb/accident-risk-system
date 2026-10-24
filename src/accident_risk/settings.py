@@ -63,6 +63,10 @@ class EnvironmentSettings(BaseSettings):
     config: Path = Path("configs/base.yaml")
     vehicle_model: Path | None = None
     physiology_model: Path | None = None
+    database: Path = Path("data/app.sqlite3")
+    bootstrap_admin_phone: str | None = None
+    bootstrap_admin_name: str = "Administrator"
+    expose_login_codes: bool = True
 
 
 def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
