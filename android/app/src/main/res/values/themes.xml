@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.RoadSense" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#0F766E</item>
+        <item name="android:windowBackground">#F3F8F6</item>
+    </style>
+</resources>
